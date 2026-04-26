@@ -1,0 +1,381 @@
+Sub GenREMESA()
+    '========================================
+    ' Macro para generar XML ISO 20022 pain.001.001.09 con múltiples transacciones
+    ' Autor: Alberto Gonzalez
+    ' Fecha: 2026-02-07
+    '========================================
+    
+    On Error GoTo ErrorHandler
+    
+    ' Declaración de variables
+    Dim ws As Worksheet
+    Dim xmlContent As String
+    Dim fileName As String
+    Dim filePath As String
+    Dim fileNum As Integer
+    Dim currentDateTime As Date
+    
+    ' Variables para datos del XML
+    Dim var_msgid As String
+    Dim var_dttm As String
+    Dim var_sum As Double
+    Dim var_trx As Integer
+    Dim var_dt As String
+    Dim var_name As String
+    Dim var_dacct As String
+    Dim var_routing As String
+    Dim baseFileName As String
+    
+    ' Variables para el bucle de transacciones
+    Dim i As Integer
+    Dim currentCol As Integer
+    Dim var_e2e As String
+    Dim var_amount As Double
+    Dim var_cacct As String
+    Dim var_chanel As String
+    Dim var_name_tx As String
+    Dim var_routing_tx As String
+    Dim cdtTrfTxInfBlock As String
+    
+    ' Validación y configuración inicial
+    Set ws = ActiveSheet
+    Application.ScreenUpdating = False
+    Application.DisplayAlerts = False
+    
+    ' Captura de fecha y hora actual
+    currentDateTime = Now
+    
+    ' ============================================
+    ' VALIDACIÓN DE DATOS DE ENTRADA
+    ' ============================================
+    
+    ' Validar que H3 no esté vacío
+    If Trim(ws.Range("H3").Value) = "" Then
+        MsgBox "Error: La celda H3 (nombre base del archivo) está vacía.", vbCritical, "Error de Validación"
+        GoTo CleanUp
+    End If
+    
+    ' Validar que H5 contenga un número válido
+    If Not IsNumeric(ws.Range("H5").Value) Or ws.Range("H5").Value < 1 Then
+        MsgBox "Error: La celda H5 debe contener un número mayor a 0 (número de transacciones).", vbCritical, "Error de Validación"
+        GoTo CleanUp
+    End If
+    
+    var_trx = CInt(ws.Range("H5").Value)
+    
+    ' Validar campos obligatorios comunes
+    If Trim(ws.Range("H10").Value) = "" Then
+        MsgBox "Error: La celda H10 (var_name) está vacía.", vbCritical, "Error de Validación"
+        GoTo CleanUp
+    End If
+    
+    If Trim(ws.Range("H11").Value) = "" Then
+        MsgBox "Error: La celda H11 (var_dacct) está vacía.", vbCritical, "Error de Validación"
+        GoTo CleanUp
+    End If
+    
+    If Trim(ws.Range("H12").Value) = "" Then
+        MsgBox "Error: La celda H12 (var_routing) está vacía.", vbCritical, "Error de Validación"
+        GoTo CleanUp
+    End If
+    
+    ' Validar que existan datos para cada transacción
+    For i = 1 To var_trx
+        currentCol = 8 + (i - 1) ' H=8, I=9, J=10, etc.
+        
+        If Trim(ws.Cells(14, currentCol).Value) = "" Then
+            MsgBox "Error: La celda " & Split(Cells(1, currentCol).Address, "$")(1) & "14 (var_amount) está vacía para la transacción " & i & ".", vbCritical, "Error de Validación"
+            GoTo CleanUp
+        End If
+        
+        If Trim(ws.Cells(15, currentCol).Value) = "" Then
+            MsgBox "Error: La celda " & Split(Cells(1, currentCol).Address, "$")(1) & "15 (var_cacct) está vacía para la transacción " & i & ".", vbCritical, "Error de Validación"
+            GoTo CleanUp
+        End If
+    Next i
+    
+    ' ============================================
+    ' CONSTRUCCIÓN DE VARIABLES GLOBALES
+    ' ============================================
+    
+    ' var_msgid: YYYYMMDDHHMM + "00010B1ASD000000000001" + HHMM
+    var_msgid = Format(currentDateTime, "YYYYMMDDHHMM") & "00010B1ASD000000000001" & Format(currentDateTime, "HHMM")
+    
+    ' var_dttm: YYYYMMDD + "T" + HH:MM:SS
+    var_dttm = Format(currentDateTime, "YYYY-MM-DD") & "T" & Format(currentDateTime, "HH:MM:SS")
+    
+    ' var_dt: YYYYMMDD
+    var_dt = Format(currentDateTime, "YYYY-MM-DD")
+    
+    ' var_name: Alfanumérico (validar y limpiar)
+    var_name = CleanXMLString(Trim(ws.Range("H10").Value))
+    
+    ' var_dacct: Numérico máximo 10 caracteres
+    var_dacct = Left(Trim(ws.Range("H11").Value), 10)
+    If Not IsNumeric(var_dacct) Then
+        MsgBox "Error: var_dacct (H11) debe ser numérico.", vbCritical, "Error de Validación"
+        GoTo CleanUp
+    End If
+    
+    ' var_routing: Numérico máximo 9 caracteres
+    var_routing = Left(Trim(ws.Range("H12").Value), 9)
+    If Not IsNumeric(var_routing) Then
+        MsgBox "Error: var_routing (H12) debe ser numérico.", vbCritical, "Error de Validación"
+        GoTo CleanUp
+    End If
+    
+    ' Calcular var_sum: suma de todos los var_amount
+    var_sum = 0
+    For i = 1 To var_trx
+        currentCol = 8 + (i - 1)
+        If IsNumeric(ws.Cells(14, currentCol).Value) Then
+            var_sum = var_sum + CDbl(ws.Cells(14, currentCol).Value)
+        End If
+    Next i
+    
+    ' ============================================
+    ' CONSTRUCCIÓN DEL NOMBRE DEL ARCHIVO
+    ' ============================================
+    
+    ' Nombre: H3 + YYYYMMDDHH + "00000" + MM
+    baseFileName = Trim(ws.Range("H3").Value)
+    fileName = baseFileName & Format(currentDateTime, "YYYYMMDDHH") & "00000" & Format(currentDateTime, "MM") & ".xml"
+    
+    ' Solicitar ubicación para guardar
+    filePath = Application.GetSaveAsFilename( _
+        InitialFileName:=fileName, _
+        FileFilter:="XML Files (*.xml), *.xml", _
+        Title:="Guardar archivo XML REMESA")
+    
+    If filePath = "False" Then
+        MsgBox "Operación cancelada por el usuario.", vbInformation, "Cancelado"
+        GoTo CleanUp
+    End If
+    
+    ' ============================================
+    ' CONSTRUCCIÓN DEL XML - CABECERA
+    ' ============================================
+    
+    xmlContent = "<?xml version=""1.0"" encoding=""UTF-8""?>" & vbCrLf
+    xmlContent = xmlContent & "<Document xmlns:xsi=""http://www.w3.org/2001/XMLSchema-instance"" xmlns:xsd=""http://www.w3.org/2001/XMLSchema"" xmlns=""urn:iso:std:iso:20022:tech:xsd:pain.001.001.09"">" & vbCrLf
+    xmlContent = xmlContent & "    <CstmrCdtTrfInitn>" & vbCrLf
+    xmlContent = xmlContent & "        <GrpHdr>" & vbCrLf
+    xmlContent = xmlContent & "            <MsgId>" & var_msgid & "</MsgId>" & vbCrLf
+    xmlContent = xmlContent & "            <CreDtTm>" & var_dttm & "</CreDtTm>" & vbCrLf
+    xmlContent = xmlContent & "            <NbOfTxs>" & var_trx & "</NbOfTxs>" & vbCrLf
+    xmlContent = xmlContent & "            <CtrlSum>" & Replace(Format(var_sum, "0.00"), ",", ".") & "</CtrlSum>" & vbCrLf
+    xmlContent = xmlContent & "            <InitgPty>" & vbCrLf
+    xmlContent = xmlContent & "                <Nm>ALBERTO VBA</Nm>" & vbCrLf
+    xmlContent = xmlContent & "            </InitgPty>" & vbCrLf
+    xmlContent = xmlContent & "        </GrpHdr>" & vbCrLf
+    xmlContent = xmlContent & "        <PmtInf>" & vbCrLf
+    xmlContent = xmlContent & "            <PmtInfId>" & var_msgid & "</PmtInfId>" & vbCrLf
+    xmlContent = xmlContent & "            <PmtMtd>TRF</PmtMtd>" & vbCrLf
+    xmlContent = xmlContent & "            <BtchBookg>false</BtchBookg>" & vbCrLf
+    xmlContent = xmlContent & "            <NbOfTxs>" & var_trx & "</NbOfTxs>" & vbCrLf
+    xmlContent = xmlContent & "            <CtrlSum>" & Replace(Format(var_sum, "0.00"), ",", ".") & "</CtrlSum>" & vbCrLf
+    xmlContent = xmlContent & "            <PmtTpInf>" & vbCrLf
+    xmlContent = xmlContent & "                <SvcLvl>" & vbCrLf
+    xmlContent = xmlContent & "                    <Cd>SDVA</Cd>" & vbCrLf
+    xmlContent = xmlContent & "                </SvcLvl>" & vbCrLf
+    xmlContent = xmlContent & "            </PmtTpInf>" & vbCrLf
+    xmlContent = xmlContent & "            <ReqdExctnDt>" & vbCrLf
+    xmlContent = xmlContent & "                <Dt>" & var_dt & "</Dt>" & vbCrLf
+    xmlContent = xmlContent & "            </ReqdExctnDt>" & vbCrLf
+    xmlContent = xmlContent & "            <Dbtr>" & vbCrLf
+    xmlContent = xmlContent & "                <Nm>" & var_name & "</Nm>" & vbCrLf
+    xmlContent = xmlContent & "            </Dbtr>" & vbCrLf
+    xmlContent = xmlContent & "            <DbtrAcct>" & vbCrLf
+    xmlContent = xmlContent & "                <Id>" & vbCrLf
+    xmlContent = xmlContent & "                    <Othr>" & vbCrLf
+    xmlContent = xmlContent & "                        <Id>" & var_dacct & "</Id>" & vbCrLf
+    xmlContent = xmlContent & "                    </Othr>" & vbCrLf
+    xmlContent = xmlContent & "                </Id>" & vbCrLf
+    xmlContent = xmlContent & "            </DbtrAcct>" & vbCrLf
+    xmlContent = xmlContent & "            <DbtrAgt>" & vbCrLf
+    xmlContent = xmlContent & "                <FinInstnId>" & vbCrLf
+    xmlContent = xmlContent & "                    <ClrSysMmbId>" & vbCrLf
+    xmlContent = xmlContent & "                        <ClrSysId>" & vbCrLf
+    xmlContent = xmlContent & "                            <Cd>USABA</Cd>" & vbCrLf
+    xmlContent = xmlContent & "                        </ClrSysId>" & vbCrLf
+    xmlContent = xmlContent & "                        <MmbId>" & var_routing & "</MmbId>" & vbCrLf
+    xmlContent = xmlContent & "                    </ClrSysMmbId>" & vbCrLf
+    xmlContent = xmlContent & "                </FinInstnId>" & vbCrLf
+    xmlContent = xmlContent & "            </DbtrAgt>" & vbCrLf
+    xmlContent = xmlContent & "            <ChrgBr>SLEV</ChrgBr>" & vbCrLf
+    
+    ' ============================================
+    ' CONSTRUCCIÓN DEL XML - TRANSACCIONES (BUCLE)
+    ' ============================================
+    
+    For i = 1 To var_trx
+        currentCol = 8 + (i - 1) ' H=8, I=9, J=10, etc.
+        
+        ' Leer variables de la transacción actual
+        var_e2e = Trim(ws.Cells(13, currentCol).Value)
+        If var_e2e = "" Then
+            ' Generar var_e2e automáticamente si está vacío
+            var_e2e = Format(currentDateTime, "YYYYMMDDHHMM") & "00010B1ASD000000000" & Format(currentDateTime, "MMSS")
+        Else
+            var_e2e = CleanXMLString(var_e2e)
+        End If
+        
+        var_amount = CDbl(ws.Cells(14, currentCol).Value)
+        
+        var_cacct = Left(Trim(ws.Cells(15, currentCol).Value), 10)
+        If Not IsNumeric(var_cacct) Then
+            MsgBox "Error: var_cacct en la transacción " & i & " (fila 15) debe ser numérico.", vbCritical, "Error de Validación"
+            GoTo CleanUp
+        End If
+        
+        ' Obtener var_name para esta transacción
+        var_name_tx = Trim(ws.Cells(10, currentCol).Value)
+        If var_name_tx = "" Then
+            var_name_tx = var_name ' Usar el nombre del deudor si está vacío
+        End If
+        var_name_tx = CleanXMLString(var_name_tx)
+        
+        ' Obtener var_routing para esta transacción
+        var_routing_tx = Trim(ws.Cells(12, currentCol).Value)
+        If var_routing_tx = "" Then
+            var_routing_tx = var_routing ' Usar el routing del deudor si está vacío
+        Else
+            var_routing_tx = Left(var_routing_tx, 9)
+            If Not IsNumeric(var_routing_tx) Then
+                MsgBox "Error: var_routing en la transacción " & i & " (fila 12) debe ser numérico.", vbCritical, "Error de Validación"
+                GoTo CleanUp
+            End If
+        End If
+        
+        var_chanel = CleanXMLString(Trim(ws.Cells(16, currentCol).Value))
+        If var_chanel = "" Then var_chanel = "WEB"
+        
+        ' Construir bloque CdtTrfTxInf
+        cdtTrfTxInfBlock = ""
+        cdtTrfTxInfBlock = cdtTrfTxInfBlock & "            <CdtTrfTxInf>" & vbCrLf
+        cdtTrfTxInfBlock = cdtTrfTxInfBlock & "                <PmtId>" & vbCrLf
+        cdtTrfTxInfBlock = cdtTrfTxInfBlock & "                    <EndToEndId>" & var_e2e & "</EndToEndId>" & vbCrLf
+        cdtTrfTxInfBlock = cdtTrfTxInfBlock & "                </PmtId>" & vbCrLf
+        cdtTrfTxInfBlock = cdtTrfTxInfBlock & "                <PmtTpInf>" & vbCrLf
+        cdtTrfTxInfBlock = cdtTrfTxInfBlock & "                    <SvcLvl>" & vbCrLf
+        cdtTrfTxInfBlock = cdtTrfTxInfBlock & "                        <Cd>SDVA</Cd>" & vbCrLf
+        cdtTrfTxInfBlock = cdtTrfTxInfBlock & "                    </SvcLvl>" & vbCrLf
+        cdtTrfTxInfBlock = cdtTrfTxInfBlock & "                    <LclInstrm>" & vbCrLf
+        cdtTrfTxInfBlock = cdtTrfTxInfBlock & "                        <Prtry>STANDARD</Prtry>" & vbCrLf
+        cdtTrfTxInfBlock = cdtTrfTxInfBlock & "                    </LclInstrm>" & vbCrLf
+        cdtTrfTxInfBlock = cdtTrfTxInfBlock & "                    <CtgyPurp>" & vbCrLf
+        cdtTrfTxInfBlock = cdtTrfTxInfBlock & "                        <Prtry>CONSUMER</Prtry>" & vbCrLf
+        cdtTrfTxInfBlock = cdtTrfTxInfBlock & "                    </CtgyPurp>" & vbCrLf
+        cdtTrfTxInfBlock = cdtTrfTxInfBlock & "                </PmtTpInf>" & vbCrLf
+        cdtTrfTxInfBlock = cdtTrfTxInfBlock & "                <Amt>" & vbCrLf
+        cdtTrfTxInfBlock = cdtTrfTxInfBlock & "                    <InstdAmt Ccy=""USD"">" & Replace(Format(var_amount, "0.00"), ",", ".") & "</InstdAmt>" & vbCrLf
+        cdtTrfTxInfBlock = cdtTrfTxInfBlock & "                </Amt>" & vbCrLf
+        cdtTrfTxInfBlock = cdtTrfTxInfBlock & "                <CdtrAgt>" & vbCrLf
+        cdtTrfTxInfBlock = cdtTrfTxInfBlock & "                    <FinInstnId>" & vbCrLf
+        cdtTrfTxInfBlock = cdtTrfTxInfBlock & "                        <ClrSysMmbId>" & vbCrLf
+        cdtTrfTxInfBlock = cdtTrfTxInfBlock & "                            <ClrSysId>" & vbCrLf
+        cdtTrfTxInfBlock = cdtTrfTxInfBlock & "                                <Cd>USABA</Cd>" & vbCrLf
+        cdtTrfTxInfBlock = cdtTrfTxInfBlock & "                            </ClrSysId>" & vbCrLf
+        cdtTrfTxInfBlock = cdtTrfTxInfBlock & "                            <MmbId>" & var_routing_tx & "</MmbId>" & vbCrLf
+        cdtTrfTxInfBlock = cdtTrfTxInfBlock & "                        </ClrSysMmbId>" & vbCrLf
+        cdtTrfTxInfBlock = cdtTrfTxInfBlock & "                    </FinInstnId>" & vbCrLf
+        cdtTrfTxInfBlock = cdtTrfTxInfBlock & "                </CdtrAgt>" & vbCrLf
+        cdtTrfTxInfBlock = cdtTrfTxInfBlock & "                <Cdtr>" & vbCrLf
+        cdtTrfTxInfBlock = cdtTrfTxInfBlock & "                    <Nm>" & var_name_tx & "</Nm>" & vbCrLf
+        cdtTrfTxInfBlock = cdtTrfTxInfBlock & "                </Cdtr>" & vbCrLf
+        cdtTrfTxInfBlock = cdtTrfTxInfBlock & "                <CdtrAcct>" & vbCrLf
+        cdtTrfTxInfBlock = cdtTrfTxInfBlock & "                    <Id>" & vbCrLf
+        cdtTrfTxInfBlock = cdtTrfTxInfBlock & "                        <Othr>" & vbCrLf
+        cdtTrfTxInfBlock = cdtTrfTxInfBlock & "                            <Id>" & var_cacct & "</Id>" & vbCrLf
+        cdtTrfTxInfBlock = cdtTrfTxInfBlock & "                        </Othr>" & vbCrLf
+        cdtTrfTxInfBlock = cdtTrfTxInfBlock & "                    </Id>" & vbCrLf
+        cdtTrfTxInfBlock = cdtTrfTxInfBlock & "                </CdtrAcct>" & vbCrLf
+        cdtTrfTxInfBlock = cdtTrfTxInfBlock & "                <RmtInf>" & vbCrLf
+        cdtTrfTxInfBlock = cdtTrfTxInfBlock & "                    <Ustrd>00000001</Ustrd>" & vbCrLf
+        cdtTrfTxInfBlock = cdtTrfTxInfBlock & "                </RmtInf>" & vbCrLf
+        cdtTrfTxInfBlock = cdtTrfTxInfBlock & "                <SplmtryData>" & vbCrLf
+        cdtTrfTxInfBlock = cdtTrfTxInfBlock & "                    <Envlp>" & vbCrLf
+        cdtTrfTxInfBlock = cdtTrfTxInfBlock & "                        <SupplementaryDataEnvelopeContentStandard>" & vbCrLf
+        cdtTrfTxInfBlock = cdtTrfTxInfBlock & "                            <Initn>" & vbCrLf
+        cdtTrfTxInfBlock = cdtTrfTxInfBlock & "                                <Chanl>" & var_chanel & "</Chanl>" & vbCrLf
+        cdtTrfTxInfBlock = cdtTrfTxInfBlock & "                            </Initn>" & vbCrLf
+        cdtTrfTxInfBlock = cdtTrfTxInfBlock & "                        </SupplementaryDataEnvelopeContentStandard>" & vbCrLf
+        cdtTrfTxInfBlock = cdtTrfTxInfBlock & "                    </Envlp>" & vbCrLf
+        cdtTrfTxInfBlock = cdtTrfTxInfBlock & "                </SplmtryData>" & vbCrLf
+        cdtTrfTxInfBlock = cdtTrfTxInfBlock & "            </CdtTrfTxInf>" & vbCrLf
+        
+        ' Agregar el bloque al XML
+        xmlContent = xmlContent & cdtTrfTxInfBlock
+    Next i
+    
+    ' ============================================
+    ' CONSTRUCCIÓN DEL XML - CIERRE
+    ' ============================================
+    
+    xmlContent = xmlContent & "        </PmtInf>" & vbCrLf
+    xmlContent = xmlContent & "    </CstmrCdtTrfInitn>" & vbCrLf
+    xmlContent = xmlContent & "</Document>"
+    
+    ' ============================================
+    ' GUARDAR ARCHIVO XML
+    ' ============================================
+    
+    fileNum = FreeFile
+    Open filePath For Output As #fileNum
+    Print #fileNum, xmlContent
+    Close #fileNum
+    
+    ' ============================================
+    ' CREAR ARCHIVO .XML.TRG VACÍO CON EL MISMO NOMBRE
+    ' ============================================
+    
+    Dim trgFilePath As String
+    Dim trgFileNum As Integer
+    
+    ' Crear el nombre del archivo .trg (mismo nombre pero con extensión .xml.trg)
+    trgFilePath = Left(filePath, Len(filePath) - 4) & ".xml.trg"
+    
+    ' Crear archivo vacío
+    trgFileNum = FreeFile
+    Open trgFilePath For Output As #trgFileNum
+    ' No escribir nada - archivo vacío
+    Close #trgFileNum
+    
+    ' Mensaje de éxito
+    MsgBox "Archivos generados exitosamente:" & vbCrLf & vbCrLf & _
+           "Transacciones: " & var_trx & vbCrLf & _
+           "Total: $" & Format(var_sum, "#,##0.00") & vbCrLf & vbCrLf & _
+           "XML: " & filePath & vbCrLf & _
+           "TRG: " & trgFilePath, vbInformation, "Éxito"
+    
+CleanUp:
+    ' Restaurar configuración de Excel
+    Application.ScreenUpdating = True
+    Application.DisplayAlerts = True
+    Set ws = Nothing
+    Exit Sub
+    
+ErrorHandler:
+    MsgBox "Error " & Err.Number & ": " & Err.Description, vbCritical, "Error"
+    Resume CleanUp
+    
+End Sub
+
+' ============================================
+' FUNCIÓN AUXILIAR: Limpiar caracteres XML
+' ============================================
+Private Function CleanXMLString(inputStr As String) As String
+    Dim result As String
+    result = inputStr
+    
+    ' Escapar caracteres especiales XML
+    result = Replace(result, "&", "&amp;")
+    result = Replace(result, "<", "&lt;")
+    result = Replace(result, ">", "&gt;")
+    result = Replace(result, """", "&quot;")
+    result = Replace(result, "'", "&apos;")
+    
+    CleanXMLString = result
+End Function
+
+
